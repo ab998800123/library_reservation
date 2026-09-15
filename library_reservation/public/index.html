@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>📚 圖書館座位預約系統</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="app-container">
+    <!-- 頂部導覽列 -->
+    <header class="header">
+      <div class="header-left">
+        <h1 class="system-title">📚 圖書館座位預約系統</h1>
+        <p class="system-subtitle">快速劃位免登入 ‧ 10席自習座位即時監控</p>
+      </div>
+      <div class="header-right">
+        <div class="clock-card" id="clockCard">
+          <span class="clock-icon">🕒</span>
+          <div class="clock-info">
+            <span class="clock-label">現在系統時間</span>
+            <span class="clock-time" id="currentTimeText">載入中...</span>
+          </div>
+        </div>
+      </div>
+    </header>
+
+    <!-- 預約規則橫幅提示 -->
+    <div class="rule-banner">
+      <div class="rule-icon">💡</div>
+      <div class="rule-content">
+        <strong>預約規範說明：</strong>
+        <span>僅開放預約<strong>今日所剩時間</strong>與<strong>隔日全天</strong>；每次預約上限為 <strong>3 小時</strong>。若需延長使用，請於結束後重新預約。</span>
+      </div>
+    </div>
+
+    <!-- 核心控制卡片：時間調整與學號登記 -->
+    <section class="control-card">
+      <div class="control-grid">
+        <!-- 1. 登記學號 -->
+        <div class="form-group student-id-group">
+          <label for="studentIdInput" class="form-label">
+            <span class="label-icon">✍️</span> 登記學號 <span class="required">*</span>
+          </label>
+          <input 
+            type="text" 
+            id="studentIdInput" 
+            class="input-control" 
+            placeholder="請輸入您的學號 (如: B11209001)" 
+            autocomplete="off"
+            maxlength="20"
+          />
+        </div>
+
+        <!-- 2. 選擇日期 -->
+        <div class="form-group date-group">
+          <label class="form-label">
+            <span class="label-icon">📅</span> 預約日期
+          </label>
+          <div class="date-buttons">
+            <button type="button" class="btn-date active" id="btnToday" onclick="selectDate('today')">
+              今日 (<span id="todayLabel">--</span>)
+            </button>
+            <button type="button" class="btn-date" id="btnTomorrow" onclick="selectDate('tomorrow')">
+              隔日 (<span id="tomorrowLabel">--</span>)
+            </button>
+          </div>
+        </div>
+
+        <!-- 3. 開始時間 -->
+        <div class="form-group time-group">
+          <label for="startTimeSelect" class="form-label">
+            <span class="label-icon">⏰</span> 開始時間
+          </label>
+          <select id="startTimeSelect" class="select-control" onchange="onTimeSelectionChange()">
+            <!-- 動態填入 -->
+          </select>
+        </div>
+
+        <!-- 4. 預約時長 (上限 3 小時) -->
+        <div class="form-group duration-group">
+          <label class="form-label">
+            <span class="label-icon">⏳</span> 預約時長 (最多3小時)
+          </label>
+          <div class="duration-buttons">
+            <button type="button" class="btn-duration active" data-hours="1" onclick="selectDuration(1)">1 小時</button>
+            <button type="button" class="btn-duration" data-hours="2" onclick="selectDuration(2)">2 小時</button>
+            <button type="button" class="btn-duration" data-hours="3" onclick="selectDuration(3)">3 小時 (上限)</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 預約時段預覽資訊列 -->
+      <div class="time-summary-bar">
+        <div class="summary-left">
+          <span class="summary-tag">預約時段預覽</span>
+          <span class="summary-highlight" id="timePeriodPreview">計算中...</span>
+        </div>
+        <div class="summary-right">
+          <div class="status-legend">
+            <span class="legend-item"><span class="badge badge-green"></span> 綠色：可預約</span>
+            <span class="legend-item"><span class="badge badge-yellow"></span> 黃色：已被預約</span>
+          </div>
+          <div class="seat-stats" id="seatStatsText">
+            🟢 空位：-- 席 | 🟡 已被預約：-- 席
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 10 個正方形座位展示區 -->
+    <main class="seats-section">
+      <div class="seats-header">
+        <h2 class="seats-title">🪑 自習座位狀態 (共 10 席)</h2>
+        <div class="seats-actions">
+          <button type="button" class="btn-refresh" onclick="fetchSeatStatuses()">🔄 重新整理</button>
+          <button type="button" class="btn-reset" onclick="confirmResetAll()">🗑️ 清空所有預約</button>
+        </div>
+      </div>
+
+      <!-- 10 個正方形網格 (2 列 x 5 欄) -->
+      <div class="seats-grid" id="seatsGrid">
+        <!-- 由 JavaScript 動態生成 10 個正方形座位卡片 -->
+      </div>
+    </main>
+  </div>
+
+  <!-- 彈出對話框：座位詳情與退位 -->
+  <div class="modal-overlay" id="seatModal">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3 class="modal-title" id="modalTitle">座位詳情</h3>
+        <button class="modal-close" onclick="closeModal()">&times;</button>
+      </div>
+      <div class="modal-body" id="modalBody">
+        <!-- 動態填入 -->
+      </div>
+      <div class="modal-footer" id="modalFooter">
+        <!-- 動態按鈕 -->
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast 訊息通知 -->
+  <div class="toast-container" id="toastContainer"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>

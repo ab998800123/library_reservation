@@ -1,0 +1,62 @@
+[
+  {
+    "seat_id": 1,
+    "is_reserved": false,
+    "student_id": "",
+    "reserved_time": ""
+  },
+  {
+    "seat_id": 2,
+    "is_reserved": false,
+    "student_id": "",
+    "reserved_time": ""
+  },
+  {
+    "seat_id": 3,
+    "is_reserved": false,
+    "student_id": "",
+    "reserved_time": ""
+  },
+  {
+    "seat_id": 4,
+    "is_reserved": false,
+    "student_id": "",
+    "reserved_time": ""
+  },
+  {
+    "seat_id": 5,
+    "is_reserved": false,
+    "student_id": "",
+    "reserved_time": ""
+  },
+  {
+    "seat_id": 6,
+    "is_reserved": false,
+    "student_id": "",
+    "reserved_time": ""
+  },
+  {
+    "seat_id": 7,
+    "is_reserved": false,
+    "student_id": "",
+    "reserved_time": ""
+  },
+  {
+    "seat_id": 8,
+    "is_reserved": false,
+    "student_id": "",
+    "reserved_time": ""
+  },
+  {
+    "seat_id": 9,
+    "is_reserved": false,
+    "student_id": "",
+    "reserved_time": ""
+  },
+  {
+    "seat_id": 10,
+    "is_reserved": false,
+    "student_id": "",
+    "reserved_time": ""
+  }
+]
