@@ -12,17 +12,222 @@ let systemState = {
   selectedDateStr: "",
   selectedStartTime: "08:00",
   selectedDuration: 1,       // 1, 2, 3
-  seats: []
+  seats: [],
+  currentUser: null
 };
 
 // 初始化
 document.addEventListener("DOMContentLoaded", async () => {
+  await checkAuthStatus();
   await fetchSystemStatus();
   setInterval(updateLiveClock, 1000);
   setInterval(fetchSeatStatuses, 10000); // 每 10 秒自動同步最新狀態
 });
 
-// 1. 取得系統狀態與伺服器時間
+// ==========================================
+// 認證與使用者狀態 (Auth Management)
+// ==========================================
+
+function getAuthToken() {
+  return localStorage.getItem("lib_token") || "";
+}
+
+function setAuthToken(token) {
+  if (token) {
+    localStorage.setItem("lib_token", token);
+  } else {
+    localStorage.removeItem("lib_token");
+  }
+}
+
+async function fetchWithAuth(url, options = {}) {
+  const token = getAuthToken();
+  const headers = options.headers ? { ...options.headers } : {};
+  if (token) {
+    headers["Authorization"] = `Bearer ${token}`;
+  }
+  return fetch(url, { ...options, headers });
+}
+
+async function checkAuthStatus() {
+  const token = getAuthToken();
+  if (!token) {
+    updateAuthUI(null);
+    return;
+  }
+
+  try {
+    const res = await fetchWithAuth("/api/auth/me");
+    const data = await res.json();
+    if (data.authenticated && data.user) {
+      systemState.currentUser = data.user;
+      updateAuthUI(data.user);
+    } else {
+      setAuthToken("");
+      systemState.currentUser = null;
+      updateAuthUI(null);
+    }
+  } catch (err) {
+    console.error("檢查登入狀態失敗:", err);
+    updateAuthUI(null);
+  }
+}
+
+function updateAuthUI(user) {
+  const widget = document.getElementById("authWidget");
+  const displayInput = document.getElementById("studentIdDisplay");
+  const inlineLoginBtn = document.getElementById("btnInlineLogin");
+
+  if (user) {
+    const displayName = user.name ? `${user.student_id} (${user.name})` : user.student_id;
+    widget.innerHTML = `
+      <div class="user-badge-container">
+        <span class="user-badge-text">👤 <strong>${escapeHtml(displayName)}</strong></span>
+        <button type="button" class="btn-logout" onclick="handleLogout()">登出</button>
+      </div>
+    `;
+    displayInput.value = `學號：${user.student_id}` + (user.name ? ` (${user.name})` : "");
+    displayInput.style.color = "#1e293b";
+    inlineLoginBtn.style.display = "none";
+  } else {
+    widget.innerHTML = `
+      <button type="button" class="btn-auth" onclick="openAuthModal('login')">🔑 登入 / 註冊</button>
+    `;
+    displayInput.value = "尚未登入，請先登入帳號";
+    displayInput.style.color = "#94a3b8";
+    inlineLoginBtn.style.display = "block";
+  }
+}
+
+// 登入 / 註冊 Modal 切換
+function openAuthModal(tab = "login") {
+  switchAuthTab(tab);
+  document.getElementById("loginErrorText").textContent = "";
+  document.getElementById("registerErrorText").textContent = "";
+  document.getElementById("authModal").classList.add("open");
+  if (tab === "login") {
+    setTimeout(() => document.getElementById("loginStudentId").focus(), 100);
+  } else {
+    setTimeout(() => document.getElementById("regStudentId").focus(), 100);
+  }
+}
+
+function closeAuthModal() {
+  document.getElementById("authModal").classList.remove("open");
+}
+
+function switchAuthTab(tab) {
+  const isLogin = tab === "login";
+  document.getElementById("tabLoginBtn").classList.toggle("active", isLogin);
+  document.getElementById("tabRegisterBtn").classList.toggle("active", !isLogin);
+  document.getElementById("loginForm").style.display = isLogin ? "block" : "none";
+  document.getElementById("registerForm").style.display = isLogin ? "none" : "block";
+  document.getElementById("loginErrorText").textContent = "";
+  document.getElementById("registerErrorText").textContent = "";
+}
+
+// 登入送出
+async function handleLoginSubmit(event) {
+  event.preventDefault();
+  const errorEl = document.getElementById("loginErrorText");
+  errorEl.textContent = "";
+
+  const studentId = document.getElementById("loginStudentId").value.trim();
+  const password = document.getElementById("loginPassword").value;
+
+  if (!studentId || !password) {
+    errorEl.textContent = "請輸入學號與密碼！";
+    return;
+  }
+
+  try {
+    const res = await fetch("/api/auth/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ student_id: studentId, password: password })
+    });
+    const data = await res.json();
+
+    if (data.success && data.token) {
+      setAuthToken(data.token);
+      systemState.currentUser = data.user;
+      updateAuthUI(data.user);
+      closeAuthModal();
+      showToast(`🎉 登入成功！歡迎回來，${data.user.name || data.user.student_id}`, "success");
+      fetchSeatStatuses();
+    } else {
+      errorEl.textContent = data.message || "登入失敗，請確認學號與密碼！";
+    }
+  } catch (err) {
+    errorEl.textContent = "無法連線至伺服器，請稍後重試！";
+  }
+}
+
+// 註冊送出
+async function handleRegisterSubmit(event) {
+  event.preventDefault();
+  const errorEl = document.getElementById("registerErrorText");
+  errorEl.textContent = "";
+
+  const studentId = document.getElementById("regStudentId").value.trim();
+  const name = document.getElementById("regName").value.trim();
+  const password = document.getElementById("regPassword").value;
+  const passwordConfirm = document.getElementById("regPasswordConfirm").value;
+
+  if (!studentId) {
+    errorEl.textContent = "請輸入學號！";
+    return;
+  }
+  if (password.length < 4) {
+    errorEl.textContent = "密碼長度至少需為 4 碼！";
+    return;
+  }
+  if (password !== passwordConfirm) {
+    errorEl.textContent = "兩次輸入的密碼不一致！";
+    return;
+  }
+
+  try {
+    const res = await fetch("/api/auth/register", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ student_id: studentId, name: name, password: password })
+    });
+    const data = await res.json();
+
+    if (data.success && data.token) {
+      setAuthToken(data.token);
+      systemState.currentUser = data.user;
+      updateAuthUI(data.user);
+      closeAuthModal();
+      showToast(`🎉 帳號註冊成功並已自動登入！`, "success");
+      fetchSeatStatuses();
+    } else {
+      errorEl.textContent = data.message || "註冊失敗，請重試！";
+    }
+  } catch (err) {
+    errorEl.textContent = "無法連線至伺服器，請稍後重試！";
+  }
+}
+
+// 登出
+async function handleLogout() {
+  try {
+    await fetchWithAuth("/api/auth/logout", { method: "POST" });
+  } catch (err) {
+    console.error("登出呼叫失敗:", err);
+  }
+  setAuthToken("");
+  systemState.currentUser = null;
+  updateAuthUI(null);
+  showToast("已成功登出系統", "info");
+  fetchSeatStatuses();
+}
+
+// ==========================================
+// 系統狀態與時鐘
+// ==========================================
+
 async function fetchSystemStatus() {
   try {
     const res = await fetch("/api/status");
@@ -37,6 +242,16 @@ async function fetchSystemStatus() {
     systemState.currentMinute = data.current_minute;
     systemState.serverTime = new Date(data.server_time.replace(/-/g, "/"));
 
+    // 資料庫連線狀態警示
+    const banner = document.getElementById("dbAlertBanner");
+    const msgEl = document.getElementById("dbAlertMessage");
+    if (!data.db_connected) {
+      banner.style.display = "flex";
+      msgEl.textContent = `請確認本機 MySQL 伺服器已啟動 (預設 127.0.0.1:3306) 並檢查 db_config.json 設定。錯誤資訊: ${data.db_error || "未連線"}`;
+    } else {
+      banner.style.display = "none";
+    }
+
     // 更新標籤
     document.getElementById("todayLabel").textContent = systemState.today.slice(5);
     document.getElementById("tomorrowLabel").textContent = systemState.tomorrow.slice(5);
@@ -49,6 +264,24 @@ async function fetchSystemStatus() {
   }
 }
 
+// 重試資料庫連線
+async function retryDbConnection() {
+  showToast("正在嘗試重新連線 MySQL...", "info");
+  try {
+    const res = await fetch("/api/db/retry", { method: "POST" });
+    const data = await res.json();
+    if (data.db_connected) {
+      showToast("✅ MySQL 資料庫連線成功！", "success");
+      await fetchSystemStatus();
+      await fetchSeatStatuses();
+    } else {
+      showToast(`❌ 連線失敗: ${data.message}`, "error");
+    }
+  } catch (err) {
+    showToast("伺服器連線異常", "error");
+  }
+}
+
 // 即時時鐘更新
 function updateLiveClock() {
   systemState.serverTime.setSeconds(systemState.serverTime.getSeconds() + 1);
@@ -58,7 +291,10 @@ function updateLiveClock() {
   document.getElementById("currentTimeText").textContent = timeString;
 }
 
-// 2. 日期切換
+// ==========================================
+// 日期與時段選取
+// ==========================================
+
 function selectDate(type, triggerFetch = true) {
   systemState.selectedDate = type;
   systemState.selectedDateStr = type === "today" ? systemState.today : systemState.tomorrow;
@@ -72,7 +308,6 @@ function selectDate(type, triggerFetch = true) {
   }
 }
 
-// 3. 填入可預約時間選單
 function populateTimeSlots() {
   const timeSelect = document.getElementById("startTimeSelect");
   timeSelect.innerHTML = "";
@@ -86,7 +321,6 @@ function populateTimeSlots() {
   let startM = 0;
 
   if (isToday) {
-    // 今日只能預約所剩時間：計算下一個可預約之整點或半點
     if (curM > 30) {
       startH = curH + 1;
       startM = 0;
@@ -104,48 +338,46 @@ function populateTimeSlots() {
     }
   }
 
-  // 可預約的最晚開始時間（圖書館關門前 1 小時）
-  const latestStartH = systemState.closeHour - 1;
-
-  let validSlots = 0;
-  for (let h = startH; h <= latestStartH; h++) {
-    const minSlots = (h === startH && startM === 30) ? [30] : [0, 30];
-    for (let m of minSlots) {
+  let slotsCount = 0;
+  for (let h = systemState.openHour; h < systemState.closeHour; h++) {
+    for (let m of [0, 30]) {
+      if (isToday) {
+        if (h < startH || (h === startH && m < startM)) {
+          continue;
+        }
+      }
       const timeStr = `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
       const opt = document.createElement("option");
       opt.value = timeStr;
-      opt.textContent = `${timeStr}`;
+      opt.textContent = `${timeStr} 開始`;
       timeSelect.appendChild(opt);
-      validSlots++;
+      slotsCount++;
     }
   }
 
-  if (validSlots === 0) {
+  if (slotsCount === 0) {
     const opt = document.createElement("option");
     opt.value = "";
-    opt.textContent = isToday ? "今日已無可預約時段 (請選隔日)" : "無可預約時段";
+    opt.textContent = "今日已過開放時間";
     timeSelect.appendChild(opt);
-    timeSelect.disabled = true;
+    systemState.selectedStartTime = "";
   } else {
-    timeSelect.disabled = false;
-    systemState.selectedStartTime = timeSelect.value;
+    systemState.selectedStartTime = timeSelect.options[0].value;
   }
 
   updateDurationButtons();
   updateTimePeriodPreview();
 }
 
-// 4. 時長選擇 (上限 3 小時)
 function selectDuration(hours) {
-  systemState.selectedDuration = hours;
+  systemState.selectedDuration = Number(hours);
   document.querySelectorAll(".btn-duration").forEach((btn) => {
-    btn.classList.toggle("active", Number(btn.getAttribute("data-hours")) === hours);
+    btn.classList.toggle("active", Number(btn.getAttribute("data-hours")) === systemState.selectedDuration);
   });
   updateTimePeriodPreview();
   fetchSeatStatuses();
 }
 
-// 根據開始時間動態調整時長按鈕是否可用 (不能超過閉館時間)
 function updateDurationButtons() {
   const startTime = document.getElementById("startTimeSelect").value;
   if (!startTime) return;
@@ -180,7 +412,6 @@ function onTimeSelectionChange() {
   fetchSeatStatuses();
 }
 
-// 計算結束時間字串
 function calculateEndTime(startTime, duration) {
   if (!startTime) return "--:--";
   const [h, m] = startTime.split(":").map(Number);
@@ -190,7 +421,6 @@ function calculateEndTime(startTime, duration) {
   return `${String(endH).padStart(2, "0")}:${String(endM).padStart(2, "0")}`;
 }
 
-// 更新預覽列文字
 function updateTimePeriodPreview() {
   const startTime = systemState.selectedStartTime;
   if (!startTime) {
@@ -203,7 +433,10 @@ function updateTimePeriodPreview() {
     `${dateStr}  ${startTime} ~ ${endTime} (共 ${systemState.selectedDuration} 小時)`;
 }
 
-// 5. 向後端查詢座位狀態並繪製 10 個正方形座位
+// ==========================================
+// 座位狀態查詢與渲染
+// ==========================================
+
 async function fetchSeatStatuses() {
   const date = systemState.selectedDateStr;
   const startTime = systemState.selectedStartTime;
@@ -222,7 +455,6 @@ async function fetchSeatStatuses() {
   }
 }
 
-// 繪製 10 個正方形座位
 function renderSeats() {
   const grid = document.getElementById("seatsGrid");
   grid.innerHTML = "";
@@ -255,16 +487,18 @@ function renderSeats() {
     } else {
       // 黃色：已被預約
       const r = seat.reservation;
+      const isMySeat = systemState.currentUser && systemState.currentUser.student_id === r.student_id;
+      const tagText = isMySeat ? "👤 我的預約" : "🟡 【已被預約】";
       card.innerHTML = `
         <div class="seat-top">
           <span class="seat-number">🪑 座位 ${String(seat.seat_id).padStart(2, "0")}</span>
-          <span class="seat-status-badge">🟡 【已被預約】</span>
+          <span class="seat-status-badge">${tagText}</span>
         </div>
         <div class="seat-details">
           <div>👤 學號: <strong>${escapeHtml(r.student_id)}</strong></div>
           <div>🕒 時段: ${r.start_time} ~ ${r.end_time}</div>
         </div>
-        <div class="seat-action-hint">點擊查看 / 退位</div>
+        <div class="seat-action-hint">${isMySeat ? "點擊退位" : "查看詳情"}</div>
       `;
       card.onclick = () => onReservedSeatClick(seat);
     }
@@ -272,23 +506,24 @@ function renderSeats() {
     grid.appendChild(card);
   });
 
-  // 更新空位統計
   document.getElementById("seatStatsText").textContent = 
     `🟢 可預約：${availableCount} 席   |   🟡 已被預約：${reservedCount} 席`;
 }
 
-// 6. 點擊綠色座位 (進行預約)
-function onAvailableSeatClick(seatId) {
-  const studentId = document.getElementById("studentIdInput").value.trim();
+// ==========================================
+// 預約與退位互動
+// ==========================================
 
-  if (!studentId) {
-    showToast("⚠️ 請先在上方輸入您的登記學號，再選擇座位劃位！", "warning");
-    const input = document.getElementById("studentIdInput");
-    input.focus();
-    input.scrollIntoView({ behavior: "smooth", block: "center" });
+// 點擊綠色可預約座位
+function onAvailableSeatClick(seatId) {
+  if (!systemState.currentUser) {
+    showToast("⚠️ 預約座位需要登入學號！請先登入或註冊帳號。", "warning");
+    openAuthModal("login");
     return;
   }
 
+  const studentId = systemState.currentUser.student_id;
+  const userName = systemState.currentUser.name || "";
   const startTime = systemState.selectedStartTime;
   if (!startTime) {
     showToast("目前時段無法預約，請選擇其他有效時段！", "warning");
@@ -298,14 +533,13 @@ function onAvailableSeatClick(seatId) {
   const endTime = calculateEndTime(startTime, systemState.selectedDuration);
   const dateLabel = systemState.selectedDate === "today" ? `今日 (${systemState.today})` : `隔日 (${systemState.tomorrow})`;
 
-  // 開啟確認預約 Modal
   openModal({
     title: `📝 確認預約座位 ${String(seatId).padStart(2, "0")}`,
     bodyHtml: `
       <div style="font-size: 15px; display:flex; flex-direction:column; gap:10px;">
-        <div style="background:#f1f5f9; padding:12px 16px; border-radius:8px;">
+        <div style="background:#f1f5f9; padding:14px 18px; border-radius:8px;">
           <div>🪑 <strong>預約座位：</strong> 第 ${String(seatId).padStart(2, "0")} 號座位</div>
-          <div>👤 <strong>登記學號：</strong> <span style="color:#2563eb; font-weight:700;">${escapeHtml(studentId)}</span></div>
+          <div>👤 <strong>登記學號：</strong> <span style="color:#2563eb; font-weight:700;">${escapeHtml(studentId)}</span> ${userName ? `(${escapeHtml(userName)})` : ""}</div>
           <div>📅 <strong>預約日期：</strong> ${dateLabel}</div>
           <div>⏰ <strong>預約時段：</strong> ${startTime} ~ ${endTime}</div>
           <div>⏳ <strong>預約時長：</strong> ${systemState.selectedDuration} 小時 (上限 3 小時)</div>
@@ -315,21 +549,20 @@ function onAvailableSeatClick(seatId) {
     `,
     buttons: [
       { text: "取消", class: "btn-secondary", onClick: closeModal },
-      { text: "確認預約劃位", class: "btn-primary", onClick: () => executeReservation(seatId, studentId) }
+      { text: "確認預約劃位", class: "btn-primary", onClick: () => executeReservation(seatId) }
     ]
   });
 }
 
-// 執行預約請求
-async function executeReservation(seatId, studentId) {
+// 執行預約
+async function executeReservation(seatId) {
   closeModal();
   try {
-    const res = await fetch("/api/reserve", {
+    const res = await fetchWithAuth("/api/reserve", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         seat_id: seatId,
-        student_id: studentId,
         date: systemState.selectedDateStr,
         start_time: systemState.selectedStartTime,
         duration: systemState.selectedDuration
@@ -348,26 +581,39 @@ async function executeReservation(seatId, studentId) {
   }
 }
 
-// 7. 點擊黃色座位 (查看詳情與退位)
+// 點擊黃色已被預約座位 (查看詳情與退位)
 function onReservedSeatClick(seat) {
   const r = seat.reservation;
+  const isMySeat = systemState.currentUser && (systemState.currentUser.student_id === r.student_id || systemState.currentUser.role === "admin");
+
+  const buttons = [{ text: "關閉", class: "btn-secondary", onClick: closeModal }];
+
+  let noticeHtml = "";
+  if (isMySeat) {
+    noticeHtml = `<p style="font-size:13px; color:#15803d; font-weight:600;">這是您預約的座位。若不再使用，可點選下方按鈕辦理退位釋出座位。</p>`;
+    buttons.push({
+      text: "釋出此座位 (退位)",
+      class: "btn-danger",
+      onClick: () => executeCancel(r.id, seat.seat_id)
+    });
+  } else {
+    noticeHtml = `<p style="font-size:13px; color:#64748b;">此座位已被其他同學劃位，僅預約本人或管理員方可辦理退位。</p>`;
+  }
+
   openModal({
     title: `🪑 座位 ${String(seat.seat_id).padStart(2, "0")} 預約詳情`,
     bodyHtml: `
       <div style="display:flex; flex-direction:column; gap:12px;">
         <div style="background:#fef9c3; border:1px solid #fde047; padding:14px; border-radius:8px; color:#854d0e;">
-          <div style="font-weight:700; font-size:16px; margin-bottom:6px;">🟡 目前狀態：已被預約</div>
-          <div>👤 <strong>登記學號：</strong> ${escapeHtml(r.student_id)}</div>
+          <div style="font-weight:700; font-size:16px; margin-bottom:6px;">🟡 目前狀態：已被預約 ${isMySeat ? "(您的預約)" : ""}</div>
+          <div>👤 <strong>登記學號：</strong> ${escapeHtml(r.student_id)} ${r.user_name ? `(${escapeHtml(r.user_name)})` : ""}</div>
           <div>📅 <strong>預約日期：</strong> ${r.date}</div>
           <div>⏰ <strong>預約時段：</strong> ${r.start_time} ~ ${r.end_time} (${r.duration} 小時)</div>
         </div>
-        <p style="font-size:13px; color:#475569;">如果您是此座位的預約者或欲釋出座位供他人使用，請點選下方按鈕辦理退位。</p>
+        ${noticeHtml}
       </div>
     `,
-    buttons: [
-      { text: "關閉", class: "btn-secondary", onClick: closeModal },
-      { text: "釋出此座位 (退位)", class: "btn-danger", onClick: () => executeCancel(r.id, seat.seat_id) }
-    ]
+    buttons: buttons
   });
 }
 
@@ -375,7 +621,7 @@ function onReservedSeatClick(seat) {
 async function executeCancel(reservationId, seatId) {
   closeModal();
   try {
-    const res = await fetch("/api/cancel", {
+    const res = await fetchWithAuth("/api/cancel", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ reservation_id: reservationId })
@@ -392,14 +638,20 @@ async function executeCancel(reservationId, seatId) {
   }
 }
 
-// 8. 清空所有預約 (重置)
+// 清空所有預約 (重置)
 function confirmResetAll() {
+  if (!systemState.currentUser) {
+    showToast("清空預約功能需先登入帳號！", "warning");
+    openAuthModal("login");
+    return;
+  }
+
   openModal({
     title: "⚠️ 清空重置所有預約",
     bodyHtml: `
       <div style="color:#991b1b; line-height:1.6;">
-        <p><strong>確定要清空所有座位的預約資料嗎？</strong></p>
-        <p style="font-size:13px; margin-top:8px;">此操作將會清空所有登記的學號與時段，並將所有 10 個座位重置為綠色（可預約）。此操作無法復原！</p>
+        <p><strong>確定要清空重置所有座位的預約資料嗎？</strong></p>
+        <p style="font-size:13px; margin-top:8px;">此操作將會釋出所有座位並將狀態重置為綠色（可預約）。此操作無法復原！</p>
       </div>
     `,
     buttons: [
@@ -410,11 +662,13 @@ function confirmResetAll() {
         onClick: async () => {
           closeModal();
           try {
-            const res = await fetch("/api/reset", { method: "POST" });
+            const res = await fetchWithAuth("/api/reset", { method: "POST" });
             const data = await res.json();
             if (data.success) {
               showToast("已清空重置所有座位！", "success");
               fetchSeatStatuses();
+            } else {
+              showToast(`清空失敗：${data.message}`, "error");
             }
           } catch (err) {
             showToast("清空重置失敗", "error");
@@ -425,7 +679,10 @@ function confirmResetAll() {
   });
 }
 
-// 通用 Modal 控制
+// ==========================================
+// Modal 與 Toast 工具
+// ==========================================
+
 function openModal({ title, bodyHtml, buttons }) {
   document.getElementById("modalTitle").textContent = title;
   document.getElementById("modalBody").innerHTML = bodyHtml;
@@ -447,7 +704,6 @@ function closeModal() {
   document.getElementById("seatModal").classList.remove("open");
 }
 
-// Toast 提示
 function showToast(message, type = "info") {
   const container = document.getElementById("toastContainer");
   const toast = document.createElement("div");
@@ -463,7 +719,6 @@ function showToast(message, type = "info") {
   }, 3500);
 }
 
-// 簡單 HTML 轉義防止 XSS
 function escapeHtml(str) {
   if (!str) return "";
   return String(str)

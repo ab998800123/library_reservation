@@ -3,22 +3,26 @@ import json
 import os
 import urllib.parse
 from datetime import datetime, date, timedelta, time
-import uuid
+import secrets
 import socket
 import webbrowser
 import threading
 
+import db
+
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PUBLIC_DIR = os.path.join(BASE_DIR, "public")
-DATA_FILE = os.path.join(BASE_DIR, "reservations.json")
 
 TOTAL_SEATS = 10
 OPEN_HOUR = 8    # 08:00
 CLOSE_HOUR = 22  # 22:00
 MAX_DURATION_HOURS = 3
 
+# 伺服器端 Session 管理 (Token -> 使用者資訊)
+SESSIONS = {}
+
 def find_available_port(host="127.0.0.1", preferred_ports=[5000, 8000, 8088, 8888, 3000]):
-    """自動尋找未被 Windows 排除或佔用的可用 Port"""
+    """自動尋找未被佔用的可用 Port"""
     for port in preferred_ports:
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         try:
@@ -27,31 +31,11 @@ def find_available_port(host="127.0.0.1", preferred_ports=[5000, 8000, 8088, 888
             return port
         except Exception:
             continue
-    # 若首選都被佔用，由系統指派空閒 Port
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     s.bind((host, 0))
     port = s.getsockname()[1]
     s.close()
     return port
-
-def load_reservations():
-    """載入所有預約記錄"""
-    if os.path.exists(DATA_FILE):
-        try:
-            with open(DATA_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception as e:
-            print(f"載入預約檔案失敗: {e}")
-            return []
-    return []
-
-def save_reservations(reservations):
-    """儲存所有預約記錄"""
-    try:
-        with open(DATA_FILE, "w", encoding="utf-8") as f:
-            json.dump(reservations, f, ensure_ascii=False, indent=2)
-    except Exception as e:
-        print(f"儲存預約檔案失敗: {e}")
 
 def add_hours_to_time(time_str, hours):
     """將 HH:MM 加上指定小時數，回傳 HH:MM"""
@@ -61,10 +45,6 @@ def add_hours_to_time(time_str, hours):
     end_m = total_minutes % 60
     return f"{end_h:02d}:{end_m:02d}"
 
-def is_overlapping(start1, end1, start2, end2):
-    """判斷兩個時間區間是否重疊 (HH:MM 格式)"""
-    return max(start1, start2) < min(end1, end2)
-
 class LibraryRequestHandler(http.server.SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=PUBLIC_DIR, **kwargs)
@@ -72,7 +52,7 @@ class LibraryRequestHandler(http.server.SimpleHTTPRequestHandler):
     def end_headers(self):
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
         self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
         super().end_headers()
 
@@ -85,6 +65,29 @@ class LibraryRequestHandler(http.server.SimpleHTTPRequestHandler):
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.end_headers()
         self.wfile.write(json.dumps(data, ensure_ascii=False).encode("utf-8"))
+
+    def get_current_user(self):
+        """從 Request 標頭取得 Bearer Token 並比對當前登入使用者"""
+        auth_header = self.headers.get("Authorization", "")
+        token = ""
+        if auth_header.startswith("Bearer "):
+            token = auth_header[7:].strip()
+        
+        if not token:
+            # 支援從 Cookie 或 query string 讀取 token
+            cookie_header = self.headers.get("Cookie", "")
+            for item in cookie_header.split(";"):
+                if "lib_token=" in item:
+                    token = item.split("lib_token=")[1].strip()
+                    break
+
+        if token and token in SESSIONS:
+            session = SESSIONS[token]
+            if datetime.now() < session["expires_at"]:
+                return session["user"], token
+            else:
+                del SESSIONS[token]
+        return None, None
 
     def do_GET(self):
         parsed = urllib.parse.urlparse(self.path)
@@ -105,11 +108,22 @@ class LibraryRequestHandler(http.server.SimpleHTTPRequestHandler):
                 "open_hour": OPEN_HOUR,
                 "close_hour": CLOSE_HOUR,
                 "max_duration_hours": MAX_DURATION_HOURS,
-                "total_seats": TOTAL_SEATS
+                "total_seats": TOTAL_SEATS,
+                "db_connected": db.DB_STATUS["connected"],
+                "db_error": db.DB_STATUS["error"]
             })
             return
 
-        # 2. 查詢指定時段座位狀態 API
+        # 2. 取得當前使用者登入狀態 API
+        if path == "/api/auth/me":
+            user, _ = self.get_current_user()
+            if user:
+                self.send_json(200, {"authenticated": True, "user": user})
+            else:
+                self.send_json(200, {"authenticated": False, "user": None})
+            return
+
+        # 3. 查詢指定時段座位狀態 API (MySQL)
         if path == "/api/seats":
             now = datetime.now()
             today_str = now.strftime("%Y-%m-%d")
@@ -125,36 +139,7 @@ class LibraryRequestHandler(http.server.SimpleHTTPRequestHandler):
                 duration = float(MAX_DURATION_HOURS)
 
             end_time = add_hours_to_time(start_time, duration)
-            reservations = load_reservations()
-
-            seats_status = []
-            for seat_id in range(1, TOTAL_SEATS + 1):
-                matched_res = None
-                for res in reservations:
-                    if res.get("seat_id") == seat_id and res.get("date") == target_date:
-                        if is_overlapping(start_time, end_time, res.get("start_time"), res.get("end_time")):
-                            matched_res = res
-                            break
-
-                if matched_res:
-                    seats_status.append({
-                        "seat_id": seat_id,
-                        "is_reserved": True,
-                        "reservation": {
-                            "id": matched_res.get("id"),
-                            "student_id": matched_res.get("student_id"),
-                            "date": matched_res.get("date"),
-                            "start_time": matched_res.get("start_time"),
-                            "end_time": matched_res.get("end_time"),
-                            "duration": matched_res.get("duration")
-                        }
-                    })
-                else:
-                    seats_status.append({
-                        "seat_id": seat_id,
-                        "is_reserved": False,
-                        "reservation": None
-                    })
+            seats_status = db.get_seats_status(target_date, start_time, end_time, TOTAL_SEATS)
 
             self.send_json(200, {
                 "target_date": target_date,
@@ -165,9 +150,9 @@ class LibraryRequestHandler(http.server.SimpleHTTPRequestHandler):
             })
             return
 
-        # 3. 取得所有預約清單 API
+        # 4. 取得所有預約清單 API (MySQL)
         if path == "/api/reservations":
-            reservations = load_reservations()
+            reservations = db.get_all_reservations(limit=100)
             self.send_json(200, reservations)
             return
 
@@ -178,27 +163,117 @@ class LibraryRequestHandler(http.server.SimpleHTTPRequestHandler):
         path = parsed.path
 
         content_length = int(self.headers.get("Content-Length", 0))
-        post_data = self.rfile.read(content_length).decode("utf-8")
+        post_data = self.rfile.read(content_length).decode("utf-8") if content_length > 0 else "{}"
         try:
             body = json.loads(post_data) if post_data else {}
         except json.JSONDecodeError:
             self.send_json(400, {"success": False, "message": "無效的 JSON 格式"})
             return
 
-        # 1. 預約座位 API
+        # ==========================================
+        # 認證 API (註冊、登入、登出)
+        # ==========================================
+
+        # 1. 註冊帳號 (學號)
+        if path == "/api/auth/register":
+            student_id = str(body.get("student_id", "")).strip().upper()
+            password = str(body.get("password", "")).strip()
+            name = str(body.get("name", "")).strip()
+
+            if not student_id:
+                self.send_json(400, {"success": False, "message": "請輸入學號！"})
+                return
+            if not password or len(password) < 4:
+                self.send_json(400, {"success": False, "message": "密碼長度至少需為 4 個字元！"})
+                return
+
+            ok, msg, user = db.create_user(student_id=student_id, password=password, name=name)
+            if not ok:
+                self.send_json(400, {"success": False, "message": msg})
+                return
+
+            # 註冊成功後自動發放 Token 登入
+            token = secrets.token_hex(16)
+            SESSIONS[token] = {
+                "user": user,
+                "expires_at": datetime.now() + timedelta(days=7)
+            }
+
+            self.send_json(200, {
+                "success": True,
+                "message": msg,
+                "token": token,
+                "user": user
+            })
+            return
+
+        # 2. 登入帳號
+        if path == "/api/auth/login":
+            student_id = str(body.get("student_id", "")).strip().upper()
+            password = str(body.get("password", "")).strip()
+
+            if not student_id or not password:
+                self.send_json(400, {"success": False, "message": "請輸入學號與密碼！"})
+                return
+
+            ok, msg, user = db.authenticate_user(student_id=student_id, password=password)
+            if not ok:
+                self.send_json(401, {"success": False, "message": msg})
+                return
+
+            token = secrets.token_hex(16)
+            SESSIONS[token] = {
+                "user": user,
+                "expires_at": datetime.now() + timedelta(days=7)
+            }
+
+            self.send_json(200, {
+                "success": True,
+                "message": msg,
+                "token": token,
+                "user": user
+            })
+            return
+
+        # 3. 登出帳號
+        if path == "/api/auth/logout":
+            _, token = self.get_current_user()
+            if token and token in SESSIONS:
+                del SESSIONS[token]
+            self.send_json(200, {"success": True, "message": "已成功登出"})
+            return
+
+        # 4. 資料庫重新連線重試 API
+        if path == "/api/db/retry":
+            ok, msg = db.init_db()
+            self.send_json(200, {
+                "success": ok,
+                "message": msg,
+                "db_connected": db.DB_STATUS["connected"]
+            })
+            return
+
+        # ==========================================
+        # 座位預約相關 API (需驗證登入)
+        # ==========================================
+
+        # 5. 預約座位 API
         if path == "/api/reserve":
+            current_user, _ = self.get_current_user()
+            if not current_user:
+                self.send_json(401, {
+                    "success": False,
+                    "message": "預約座位需要登入帳號！請先登入或註冊學號。"
+                })
+                return
+
             seat_id = body.get("seat_id")
-            student_id = str(body.get("student_id", "")).strip()
             target_date = body.get("date")
             start_time = body.get("start_time")
             try:
                 duration = float(body.get("duration", 1))
             except ValueError:
                 duration = 1.0
-
-            if not student_id:
-                self.send_json(400, {"success": False, "message": "請輸入登記學號！"})
-                return
 
             if not isinstance(seat_id, int) or seat_id < 1 or seat_id > TOTAL_SEATS:
                 self.send_json(400, {"success": False, "message": f"座位編號必須為 1 至 {TOTAL_SEATS} 號！"})
@@ -254,75 +329,79 @@ class LibraryRequestHandler(http.server.SimpleHTTPRequestHandler):
                     })
                     return
 
-            # 檢查時段重疊衝突
-            reservations = load_reservations()
-            for res in reservations:
-                if res.get("seat_id") == seat_id and res.get("date") == target_date:
-                    if is_overlapping(start_time, end_time, res.get("start_time"), res.get("end_time")):
-                        self.send_json(409, {
-                            "success": False,
-                            "message": f"此座位在該時段 ({res.get('start_time')} ~ {res.get('end_time')}) 已被學號【{res.get('student_id')}】預約！"
-                        })
-                        return
+            # 呼叫 MySQL 建立預約 (具備事務重疊檢查)
+            ok, msg, new_res = db.create_reservation(
+                user_id=current_user["id"],
+                seat_id=seat_id,
+                reservation_date=target_date,
+                start_time=start_time,
+                end_time=end_time,
+                duration=duration
+            )
 
-            new_res = {
-                "id": str(uuid.uuid4())[:8],
-                "seat_id": seat_id,
-                "student_id": student_id,
-                "date": target_date,
-                "start_time": start_time,
-                "end_time": end_time,
-                "duration": duration,
-                "created_at": now.strftime("%Y-%m-%d %H:%M:%S")
-            }
-
-            reservations.append(new_res)
-            save_reservations(reservations)
+            if not ok:
+                self.send_json(409, {"success": False, "message": msg})
+                return
 
             self.send_json(200, {
                 "success": True,
-                "message": f"預約成功！座位 {seat_id:02d} 已預約（{target_date} {start_time}~{end_time}，共 {duration} 小時）。",
+                "message": msg,
                 "reservation": new_res
             })
             return
 
-        # 2. 取消預約 (退位) API
+        # 6. 取消預約 (退位) API
         if path == "/api/cancel":
+            current_user, _ = self.get_current_user()
+            if not current_user:
+                self.send_json(401, {
+                    "success": False,
+                    "message": "退位操作需要先登入帳號！"
+                })
+                return
+
             res_id = body.get("reservation_id")
             seat_id = body.get("seat_id")
             target_date = body.get("date")
             start_time = body.get("start_time")
 
-            reservations = load_reservations()
-            original_count = len(reservations)
+            is_admin = (current_user.get("role") == "admin")
+            ok, msg = db.cancel_reservation(
+                res_id=res_id,
+                seat_id=seat_id,
+                reservation_date=target_date,
+                start_time=start_time,
+                current_user_id=current_user["id"],
+                is_admin=is_admin
+            )
 
-            if res_id:
-                reservations = [r for r in reservations if r.get("id") != res_id]
-            elif seat_id and target_date and start_time:
-                reservations = [
-                    r for r in reservations
-                    if not (r.get("seat_id") == seat_id and r.get("date") == target_date and r.get("start_time") == start_time)
-                ]
-            else:
-                self.send_json(400, {"success": False, "message": "缺少取消預約所需之參數"})
+            if not ok:
+                self.send_json(400, {"success": False, "message": msg})
                 return
 
-            if len(reservations) < original_count:
-                save_reservations(reservations)
-                self.send_json(200, {"success": True, "message": "已成功退位釋出座位！"})
-            else:
-                self.send_json(404, {"success": False, "message": "找不到符合的預約記錄"})
+            self.send_json(200, {"success": True, "message": msg})
             return
 
-        # 3. 清空重置所有預約 API
+        # 7. 清空重置所有預約 API
         if path == "/api/reset":
-            save_reservations([])
-            self.send_json(200, {"success": True, "message": "已清空重置所有座位預約記錄！"})
+            current_user, _ = self.get_current_user()
+            if not current_user:
+                self.send_json(401, {"success": False, "message": "重置預約需先登入！"})
+                return
+
+            ok, msg = db.reset_all_reservations()
+            if not ok:
+                self.send_json(500, {"success": False, "message": msg})
+                return
+            self.send_json(200, {"success": True, "message": msg})
             return
 
         self.send_json(404, {"success": False, "message": "Not Found"})
 
 def run_server():
+    # 啟動時嘗試初始化 MySQL
+    db.init_db()
+
     host = "127.0.0.1"
     port = find_available_port(host=host)
     server_address = (host, port)
@@ -331,13 +410,15 @@ def run_server():
     url = f"http://localhost:{port}"
     
     print("=" * 60)
-    print("  圖書館座位預約系統 Web 伺服器已成功啟動！")
+    print("  圖書館座位預約系統 Web 伺服器 (MySQL + 學號登入版) 已啟動！")
     print(f"  網址: {url}")
-    print("  規則: 僅限預約今日所剩時間與隔日，單次上限 3 小時")
-    print("  (請保持此視窗開啟，關閉此視窗將停止網站服務)")
+    print("  規則: 需登入學號使用，單次上限 3 小時")
+    if db.DB_STATUS["connected"]:
+        print("  MySQL 狀態: [已成功連線]")
+    else:
+        print("  MySQL 狀態: [未連線 - 請確認本機 3306 埠 MySQL 服務]")
     print("=" * 60)
 
-    # 自動於 0.8 秒後開啟瀏覽器
     def open_browser():
         try:
             webbrowser.open(url)

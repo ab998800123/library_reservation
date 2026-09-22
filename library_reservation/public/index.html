@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>📚 圖書館座位預約系統</title>
+  <title>📚 圖書館座位預約系統 (MySQL 關聯資料庫版)</title>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -12,9 +12,16 @@
     <header class="header">
       <div class="header-left">
         <h1 class="system-title">📚 圖書館座位預約系統</h1>
-        <p class="system-subtitle">快速劃位免登入 ‧ 10席自習座位即時監控</p>
+        <p class="system-subtitle">MySQL 關聯資料庫 ‧ 學號登入認證 ‧ 10席自習座位即時監控</p>
       </div>
       <div class="header-right">
+        <!-- 登入狀態 Widget -->
+        <div class="auth-widget" id="authWidget">
+          <!-- 由 JS 動態渲染：未登入 (登入/註冊按鈕) 或 已登入 (學號 + 登出) -->
+          <button type="button" class="btn-auth" onclick="openAuthModal('login')">🔑 登入 / 註冊</button>
+        </div>
+
+        <!-- 系統時鐘 -->
         <div class="clock-card" id="clockCard">
           <span class="clock-icon">🕒</span>
           <div class="clock-info">
@@ -25,31 +32,43 @@
       </div>
     </header>
 
+    <!-- 資料庫未連線警告橫幅 (連線正常時自動隱藏) -->
+    <div class="db-alert-banner" id="dbAlertBanner" style="display: none;">
+      <div class="db-alert-icon">⚠️</div>
+      <div class="db-alert-content">
+        <strong>MySQL 資料庫尚未連線：</strong>
+        <span id="dbAlertMessage">請確認本機 MySQL 伺服器已啟動 (預設 127.0.0.1:3306) 並檢查 db_config.json 設定。</span>
+      </div>
+      <button type="button" class="btn-db-retry" onclick="retryDbConnection()">🔄 重新整理連線</button>
+    </div>
+
     <!-- 預約規則橫幅提示 -->
     <div class="rule-banner">
       <div class="rule-icon">💡</div>
       <div class="rule-content">
         <strong>預約規範說明：</strong>
-        <span>僅開放預約<strong>今日所剩時間</strong>與<strong>隔日全天</strong>；每次預約上限為 <strong>3 小時</strong>。若需延長使用，請於結束後重新預約。</span>
+        <span>需<strong>登入學號</strong>方可預約；開放預約<strong>今日所剩時間</strong>與<strong>隔日全天</strong>；每次預約上限 <strong>3 小時</strong>；僅可退自己預約的座位。</span>
       </div>
     </div>
 
-    <!-- 核心控制卡片：時間調整與學號登記 -->
+    <!-- 核心控制卡片：時間調整與當前登入者 -->
     <section class="control-card">
       <div class="control-grid">
-        <!-- 1. 登記學號 -->
+        <!-- 1. 當前預約學號 (綁定登入狀態) -->
         <div class="form-group student-id-group">
-          <label for="studentIdInput" class="form-label">
-            <span class="label-icon">✍️</span> 登記學號 <span class="required">*</span>
+          <label class="form-label">
+            <span class="label-icon">✍️</span> 登記預約學號 <span class="required">*</span>
           </label>
-          <input 
-            type="text" 
-            id="studentIdInput" 
-            class="input-control" 
-            placeholder="請輸入您的學號 (如: B11209001)" 
-            autocomplete="off"
-            maxlength="20"
-          />
+          <div class="user-status-field" id="userStatusField">
+            <input 
+              type="text" 
+              id="studentIdDisplay" 
+              class="input-control readonly-input" 
+              placeholder="尚未登入，請先登入帳號" 
+              readonly
+            />
+            <button type="button" class="btn-inline-login" id="btnInlineLogin" onclick="openAuthModal('login')">點此登入</button>
+          </div>
         </div>
 
         <!-- 2. 選擇日期 -->
@@ -137,6 +156,59 @@
       </div>
       <div class="modal-footer" id="modalFooter">
         <!-- 動態按鈕 -->
+      </div>
+    </div>
+  </div>
+
+  <!-- 彈出對話框：使用者登入 / 註冊 -->
+  <div class="modal-overlay" id="authModal">
+    <div class="modal-card auth-modal-card">
+      <div class="modal-header">
+        <div class="auth-tabs">
+          <button type="button" class="auth-tab-btn active" id="tabLoginBtn" onclick="switchAuthTab('login')">學生登入</button>
+          <button type="button" class="auth-tab-btn" id="tabRegisterBtn" onclick="switchAuthTab('register')">註冊新帳號</button>
+        </div>
+        <button class="modal-close" onclick="closeAuthModal()">&times;</button>
+      </div>
+      
+      <div class="modal-body">
+        <!-- 登入表單 -->
+        <form id="loginForm" onsubmit="handleLoginSubmit(event)">
+          <div class="form-group">
+            <label class="form-label" for="loginStudentId">學號 (帳號)</label>
+            <input type="text" id="loginStudentId" class="input-control" placeholder="請輸入學號 (如: B11209001)" required autocomplete="username" />
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="loginPassword">密碼</label>
+            <input type="password" id="loginPassword" class="input-control" placeholder="請輸入密碼" required autocomplete="current-password" />
+          </div>
+          <div class="auth-error-text" id="loginErrorText"></div>
+          <button type="submit" class="btn-primary auth-submit-btn">立即登入</button>
+          <p class="auth-switch-hint">還沒有帳號？<a href="javascript:void(0)" onclick="switchAuthTab('register')">點此註冊</a></p>
+        </form>
+
+        <!-- 註冊表單 -->
+        <form id="registerForm" onsubmit="handleRegisterSubmit(event)" style="display: none;">
+          <div class="form-group">
+            <label class="form-label" for="regStudentId">學號 (作為登入帳號) <span class="required">*</span></label>
+            <input type="text" id="regStudentId" class="input-control" placeholder="請輸入學號 (如: B11209001)" required />
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="regName">學生姓名 (選填)</label>
+            <input type="text" id="regName" class="input-control" placeholder="請輸入您的姓名" />
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="regPassword">設定密碼 (至少 4 位) <span class="required">*</span></label>
+            <input type="password" id="regPassword" class="input-control" placeholder="請設定密碼" minlength="4" required />
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="regPasswordConfirm">確認密碼 <span class="required">*</span></label>
+            <input type="password" id="regPasswordConfirm" class="input-control" placeholder="請再次輸入密碼" minlength="4" required />
+          </div>
+          <div class="auth-error-text" id="registerErrorText"></div>
+          <button type="submit" class="btn-primary auth-submit-btn">建立帳號並登入</button>
+          <p class="auth-switch-hint">已有帳號？<a href="javascript:void(0)" onclick="switchAuthTab('login')">直接登入</a></p>
+        </form>
       </div>
     </div>
   </div>

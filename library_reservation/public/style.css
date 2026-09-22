@@ -643,3 +643,200 @@ body {
     gap: 8px;
   }
 }
+
+/* ==========================================
+   登入 Widget 與 使用者身分樣式
+   ========================================== */
+.auth-widget {
+  display: flex;
+  align-items: center;
+}
+
+.btn-auth {
+  background: var(--accent);
+  color: #ffffff;
+  border: none;
+  padding: 8px 16px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.2s, transform 0.1s;
+}
+
+.btn-auth:hover {
+  background: var(--accent-hover);
+  transform: translateY(-1px);
+}
+
+.user-badge-container {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: #f8fafc;
+  border: 1px solid var(--border);
+  padding: 6px 12px;
+  border-radius: 8px;
+}
+
+.user-badge-text {
+  font-size: 13px;
+  color: var(--primary);
+  font-weight: 600;
+}
+
+.btn-logout {
+  background: #f1f5f9;
+  color: var(--danger);
+  border: 1px solid #fed7d7;
+  padding: 4px 10px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.btn-logout:hover {
+  background: var(--danger);
+  color: #fff;
+}
+
+/* 資料庫警告橫幅 */
+.db-alert-banner {
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  border-radius: var(--radius);
+  padding: 12px 18px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: #991b1b;
+  box-shadow: var(--shadow);
+}
+
+.db-alert-icon {
+  font-size: 20px;
+  flex-shrink: 0;
+}
+
+.db-alert-content {
+  flex: 1;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.btn-db-retry {
+  background: #ef4444;
+  color: white;
+  border: none;
+  padding: 6px 12px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.btn-db-retry:hover {
+  background: #dc2626;
+}
+
+/* 唯讀使用者狀態輸入欄 */
+.user-status-field {
+  display: flex;
+  gap: 8px;
+}
+
+.readonly-input {
+  background-color: #f8fafc;
+  cursor: default;
+  color: var(--primary);
+  font-weight: 600;
+}
+
+.btn-inline-login {
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  padding: 0 14px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.btn-inline-login:hover {
+  background: var(--accent-hover);
+}
+
+/* 登入 / 註冊 Modal 頁籤與樣式 */
+.auth-modal-card {
+  max-width: 420px;
+}
+
+.auth-tabs {
+  display: flex;
+  gap: 8px;
+}
+
+.auth-tab-btn {
+  background: transparent;
+  border: none;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 6px 12px;
+  border-bottom: 2px solid transparent;
+  transition: all 0.2s;
+}
+
+.auth-tab-btn.active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+
+.auth-error-text {
+  color: var(--danger);
+  font-size: 12px;
+  margin-top: 8px;
+  min-height: 16px;
+  font-weight: 600;
+}
+
+.auth-submit-btn {
+  width: 100%;
+  margin-top: 14px;
+  padding: 10px;
+  border-radius: 8px;
+  background: var(--accent);
+  color: white;
+  border: none;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.auth-submit-btn:hover {
+  background: var(--accent-hover);
+}
+
+.auth-switch-hint {
+  text-align: center;
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-top: 14px;
+}
+
+.auth-switch-hint a {
+  color: var(--accent);
+  text-decoration: none;
+  font-weight: 600;
+}
+
+.auth-switch-hint a:hover {
+  text-decoration: underline;
+}
+
